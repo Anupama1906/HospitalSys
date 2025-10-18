@@ -1331,6 +1331,254 @@ app.delete("/api/branch-manager/appointments/:id", authorize(['branch manager'])
 // as the frontend will ensure they can only edit/delete items visible to them.
 
 // =========================================================================================
+// --- TREATMENT RECORDING ENDPOINTS ---
+// =========================================================================================
+
+// GET all treatment catalog items (for dropdowns)
+app.get("/api/treatment-catalogue", authorize(['admin', 'receptionist', 'doctor']), async (req, res) => {
+    try {
+        const [rows] = await pool.query("SELECT * FROM Treatment_Catalogue ORDER BY category, name");
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// GET treatments for a specific appointment
+app.get("/api/appointments/:id/treatments", authorize(['admin', 'receptionist', 'doctor']), async (req, res) => {
+    try {
+        const [rows] = await pool.query(`
+            SELECT at.*, tc.name, tc.price, tc.category 
+            FROM Appointment_Treatment at
+            JOIN Treatment_Catalogue tc ON at.service_code = tc.service_code
+            WHERE at.appointment_id = ?
+        `, [req.params.id]);
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// POST add treatment to an appointment
+app.post("/api/appointments/:id/treatments", authorize(['admin', 'receptionist', 'doctor']), async (req, res) => {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+        
+        const { service_code, notes, actual_price } = req.body;
+        const appointmentId = req.params.id;
+        
+        // Verify appointment exists and is completed
+        const [[appointment]] = await connection.query(
+            "SELECT status FROM Appointment WHERE appointment_id = ?", 
+            [appointmentId]
+        );
+        
+        if (!appointment) {
+            await connection.rollback();
+            return res.status(404).json({ message: "Appointment not found." });
+        }
+        
+        // Insert treatment
+        await connection.query(
+            "INSERT INTO Appointment_Treatment (appointment_id, service_code, notes, actual_price) VALUES (?, ?, ?, ?)",
+            [appointmentId, service_code, notes, actual_price]
+        );
+        
+        await connection.commit();
+        res.status(201).json({ message: "Treatment added successfully." });
+    } catch (err) {
+        await connection.rollback();
+        handleDatabaseError(res, err);
+    } finally {
+        connection.release();
+    }
+});
+
+// DELETE treatment from appointment
+app.delete("/api/appointments/:id/treatments/:serviceCode", authorize(['admin', 'receptionist']), async (req, res) => {
+    try {
+        await pool.query(
+            "DELETE FROM Appointment_Treatment WHERE appointment_id = ? AND service_code = ?",
+            [req.params.id, req.params.serviceCode]
+        );
+        res.status(204).send();
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// =========================================================================================
+// --- INSURANCE CLAIMS ENDPOINTS ---
+// =========================================================================================
+
+// GET all insurance claims
+app.get("/api/insurance-claims", authorize(['admin', 'receptionist']), async (req, res) => {
+    try {
+        const [rows] = await pool.query(`
+            SELECT ic.*, ip.name as insurance_provider_name, 
+                   p.name as patient_name, i.invoice_id
+            FROM Insurance_Claim ic
+            JOIN Insurance_Provider ip ON ic.insurance_provider_id = ip.id
+            JOIN Invoice i ON ic.invoice_id = i.invoice_id
+            JOIN Appointment a ON i.appointment_id = a.appointment_id
+            JOIN Patient p ON a.patient_id = p.patient_id
+            ORDER BY ic.claim_date DESC
+        `);
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// GET claims for a specific invoice
+app.get("/api/invoices/:id/claims", authorize(['admin', 'receptionist']), async (req, res) => {
+    try {
+        const [rows] = await pool.query(`
+            SELECT ic.*, ip.name as insurance_provider_name
+            FROM Insurance_Claim ic
+            JOIN Insurance_Provider ip ON ic.insurance_provider_id = ip.id
+            WHERE ic.invoice_id = ?
+        `, [req.params.id]);
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// POST create insurance claim
+app.post("/api/insurance-claims", authorize(['admin', 'receptionist']), async (req, res) => {
+    try {
+        const { invoice_id, insurance_provider_id, claimed_amount, claim_status } = req.body;
+        await pool.query(
+            "INSERT INTO Insurance_Claim (invoice_id, insurance_provider_id, claimed_amount, claim_status, claim_date) VALUES (?, ?, ?, ?, CURDATE())",
+            [invoice_id, insurance_provider_id, claimed_amount, claim_status || 'Pending']
+        );
+        res.status(201).json({ message: "Insurance claim created successfully." });
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// PUT update insurance claim status
+app.put("/api/insurance-claims/:id", authorize(['admin', 'receptionist']), async (req, res) => {
+    try {
+        const { claim_status, approval_date } = req.body;
+        await pool.query(
+            "UPDATE Insurance_Claim SET claim_status = ?, approval_date = ? WHERE claim_id = ?",
+            [claim_status, approval_date, req.params.id]
+        );
+        res.json({ message: "Insurance claim updated successfully." });
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// =========================================================================================
+// --- REPORTING ENDPOINTS (5 Required Reports) ---
+// =========================================================================================
+
+// Report 1: Branch-wise appointment summary per day
+app.get("/api/reports/branch-appointments", authorize(['admin', 'branch manager']), async (req, res) => {
+    try {
+        const { start_date, end_date } = req.query;
+        let query = "SELECT * FROM vw_branch_appointment_summary";
+        const params = [];
+        
+        if (start_date && end_date) {
+            query += " WHERE appointment_date BETWEEN ? AND ?";
+            params.push(start_date, end_date);
+        }
+        
+        query += " ORDER BY appointment_date DESC, branch_name";
+        const [rows] = await pool.query(query, params);
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// Report 2: Doctor-wise revenue report
+app.get("/api/reports/doctor-revenue", authorize(['admin', 'branch manager']), async (req, res) => {
+    try {
+        const [rows] = await pool.query(`
+            SELECT * FROM vw_doctor_revenue 
+            WHERE total_appointments > 0 
+            ORDER BY total_revenue DESC
+        `);
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// Report 3: Patients with outstanding balances
+app.get("/api/reports/outstanding-patients", authorize(['admin', 'receptionist', 'branch manager']), async (req, res) => {
+    try {
+        const [rows] = await pool.query("SELECT * FROM vw_outstanding_patients ORDER BY total_outstanding DESC");
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// Report 4: Treatment category summary
+app.get("/api/reports/treatment-categories", authorize(['admin']), async (req, res) => {
+    try {
+        const { start_date, end_date } = req.query;
+        let query = `
+            SELECT 
+                tc.category,
+                COUNT(DISTINCT at.appointment_id) AS treatment_count,
+                COUNT(*) AS total_treatments,
+                SUM(COALESCE(at.actual_price, tc.price)) AS total_revenue,
+                AVG(COALESCE(at.actual_price, tc.price)) AS avg_price
+            FROM Treatment_Catalogue tc
+            LEFT JOIN Appointment_Treatment at ON tc.service_code = at.service_code
+        `;
+        const params = [];
+        
+        if (start_date && end_date) {
+            query += `
+                LEFT JOIN Appointment a ON at.appointment_id = a.appointment_id
+                WHERE a.schedule_date BETWEEN ? AND ?
+            `;
+            params.push(start_date, end_date);
+        }
+        
+        query += " WHERE tc.category IS NOT NULL GROUP BY tc.category ORDER BY treatment_count DESC";
+        const [rows] = await pool.query(query, params);
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// Report 5: Insurance coverage vs out-of-pocket
+app.get("/api/reports/insurance-coverage", authorize(['admin']), async (req, res) => {
+    try {
+        const [rows] = await pool.query("SELECT * FROM vw_insurance_vs_outofpocket ORDER BY total_billing DESC");
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// =========================================================================================
+// --- EMERGENCY APPOINTMENT ENDPOINT ---
+// =========================================================================================
+
+app.post("/api/appointments/emergency", authorize(['admin', 'receptionist']), async (req, res) => {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+        
+        const { patient_id, doctor_id, branch_id } = req.body;
+        
+        if (!patient_id || !doctor_id || !branch_id) {
+            await connection.rollback();
+            return res.status(400).json({ message: "Missing required fields for emergency appointment." });
+        }
+        
+        // Call the stored procedure for emergency appointments
+        const [result] = await connection.query(
+            "CALL CreateEmergencyAppointment(?, ?, ?, @appt_id)",
+            [patient_id, doctor_id, branch_id]
+        );
+        
+        // Get the output parameter
+        const [[{ '@appt_id': appointmentId }]] = await connection.query("SELECT @appt_id");
+        
+        await connection.commit();
+        res.status(201).json({ 
+            message: "Emergency appointment created successfully.", 
+            appointment_id: appointmentId 
+        });
+    } catch (err) {
+        await connection.rollback();
+        handleDatabaseError(res, err);
+    } finally {
+        connection.release();
+    }
+});
+
+// =========================================================================================
 
 app.listen(PORT, () => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);
