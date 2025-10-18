@@ -181,7 +181,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const renderAppointmentsTable = (data) => {
         const tableBody = document.getElementById("table-body");
         if (!data || data.length === 0) { renderNoDataMessage("table-body"); return; }
-        const statusColors = { Scheduled: 'primary', Completed: 'success', Cancelled: 'danger' };
+        const statusColors = { Scheduled: 'primary', Completed: 'success', Cancelled: 'danger', Rescheduled: 'warning' };
         tableBody.innerHTML = data.map(a => `<tr><td>${a.appointment_id}</td><td>${new Date(a.schedule_date).toLocaleString("en-SG")}</td><td>${a.patient_name}</td><td>${a.doctor_name}</td><td><span class="badge bg-${statusColors[a.status] || 'secondary'}">${a.status}</span></td><td class="table-actions"><button class="btn btn-sm btn-outline-secondary" data-action="edit" data-type="appointment" data-id="${a.appointment_id}" title="Edit"><i class="bi bi-pencil-fill"></i></button><button class="btn btn-sm btn-outline-danger" data-action="delete" data-type="appointment" data-id="${a.appointment_id}" title="Delete"><i class="bi bi-trash-fill"></i></button></td></tr>`).join("");
     };
 
@@ -241,7 +241,7 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("doctor-count").textContent = summary.doctors;
         }
         if (invoices) {
-            const totalRevenue = invoices.reduce((sum, inv) => sum + (parseFloat(inv.total_amount) - parseFloat(inv.outstanding_balance)), 0);
+            const totalRevenue = invoices.reduce((sum, inv) => sum + (parseFloat(inv.total_amount) - parseFloat(inv.due_amount || 0)), 0);
             document.getElementById("revenue-total").textContent = `$${totalRevenue.toFixed(2)}`;
         }
         Chart.defaults.color = '#8492a6'; 
@@ -324,7 +324,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tableBody = document.getElementById("table-body");
         const renderInvoices = (data) => {
              if(data && data.length > 0) {
-                tableBody.innerHTML = data.map(i => `<tr><td>#${i.invoice_id}</td><td>${i.patient_name}</td><td>$${parseFloat(i.total_amount).toFixed(2)}</td><td>$${parseFloat(i.outstanding_balance).toFixed(2)}</td><td><span class="badge bg-${i.status === "Paid" ? "success" : i.status === "Partially Paid" ? "warning" : "danger"}">${i.status}</span></td><td>${new Date(i.due_date).toLocaleDateString()}</td><td class="table-actions"><button class="btn btn-sm btn-outline-info" title="View Payments" data-action="view" data-type="payment" data-id="${i.invoice_id}"><i class="bi bi-cash"></i></button></td></tr>`).join("");
+                tableBody.innerHTML = data.map(i => `<tr><td>#${i.invoice_id}</td><td>${i.patient_name}</td><td>$${parseFloat(i.total_amount).toFixed(2)}</td><td>$${parseFloat(i.due_amount || 0).toFixed(2)}</td><td><span class="badge bg-${i.status === "Paid" ? "success" : i.status === "Partially Paid" ? "warning" : "danger"}">${i.status}</span></td><td>${new Date(i.due_date).toLocaleDateString()}</td><td class="table-actions"><button class="btn btn-sm btn-outline-info" title="View Payments" data-action="view" data-type="payment" data-id="${i.invoice_id}"><i class="bi bi-cash"></i></button></td></tr>`).join("");
             } else {
                 renderNoDataMessage("table-body");
             }
