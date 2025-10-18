@@ -1103,7 +1103,7 @@ app.get("/api/branch-manager/stats", authorize(['branch manager']), getBranchInf
             SELECT 
                 SUM(CASE WHEN status = 'Scheduled' THEN 1 ELSE 0 END) as scheduled_today,
                 SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as completed_today,
-                SUM(CASE WHEN status = 'Canceled' THEN 1 ELSE 0 END) as canceled_today
+                SUM(CASE WHEN status = 'Cancelled' THEN 1 ELSE 0 END) as canceled_today
             FROM Appointment 
             WHERE branch_id = ? AND DATE(schedule_date) = CURDATE()
         `, [branchId]);
@@ -1331,6 +1331,84 @@ app.delete("/api/branch-manager/appointments/:id", authorize(['branch manager'])
 // as the frontend will ensure they can only edit/delete items visible to them.
 
 // =========================================================================================
+
+// =========================================================================================
+// --- REPORTING ENDPOINTS (Admin + Branch Manager) ---
+// These leverage the reporting views defined in the SQL setup script
+// =========================================================================================
+
+// Branch-wise appointment summary per day
+app.get("/api/reports/branch-appointments", authorize(['admin', 'branch manager']), async (req, res) => {
+    try {
+        const { start_date, end_date, branch_id } = req.query;
+        let query = "SELECT * FROM vw_branch_appointment_summary WHERE 1=1";
+        const params = [];
+
+        if (req.user.role.toLowerCase() === 'branch manager') {
+            const [[row]] = await pool.query("SELECT s.branch_id FROM Staff s WHERE s.user_id = ?", [req.user.userId]);
+            if (!row) return res.status(403).json({ message: "Forbidden: No branch assigned." });
+            query += " AND branch_id = ?";
+            params.push(row.branch_id);
+        } else if (branch_id) {
+            query += " AND branch_id = ?";
+            params.push(branch_id);
+        }
+
+        if (start_date) { query += " AND appointment_date >= ?"; params.push(start_date); }
+        if (end_date) { query += " AND appointment_date <= ?"; params.push(end_date); }
+
+        query += " ORDER BY appointment_date DESC, branch_name ASC";
+        const [rows] = await pool.query(query, params);
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// Doctor-wise revenue report (optionally filter by branch)
+app.get("/api/reports/doctor-revenue", authorize(['admin', 'branch manager']), async (req, res) => {
+    try {
+        const { branch_id } = req.query;
+        let query = "SELECT * FROM vw_doctor_revenue WHERE 1=1";
+        const params = [];
+
+        if (req.user.role.toLowerCase() === 'branch manager') {
+            const [[row]] = await pool.query("SELECT s.branch_id FROM Staff s WHERE s.user_id = ?", [req.user.userId]);
+            if (!row) return res.status(403).json({ message: "Forbidden: No branch assigned." });
+            query += " AND branch_name IS NOT NULL AND branch_name = (SELECT name FROM Branch WHERE branch_id = ?)";
+            params.push(row.branch_id);
+        } else if (branch_id) {
+            query += " AND branch_name IS NOT NULL AND branch_name = (SELECT name FROM Branch WHERE branch_id = ?)";
+            params.push(branch_id);
+        }
+
+        query += " ORDER BY total_revenue DESC";
+        const [rows] = await pool.query(query, params);
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// Patients with outstanding balances (admin)
+app.get("/api/reports/outstanding-patients", authorize(['admin']), async (req, res) => {
+    try {
+        const [rows] = await pool.query("SELECT * FROM vw_outstanding_patients ORDER BY total_outstanding DESC");
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// Treatments per category (admin)
+app.get("/api/reports/treatments-per-category", authorize(['admin']), async (req, res) => {
+    try {
+        const [rows] = await pool.query("SELECT * FROM vw_treatment_category_summary ORDER BY treatment_count DESC");
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
+
+// Insurance coverage vs out-of-pocket (admin)
+app.get("/api/reports/insurance-coverage", authorize(['admin']), async (req, res) => {
+    try {
+        const [rows] = await pool.query("SELECT * FROM vw_insurance_vs_outofpocket ORDER BY total_billing DESC");
+        res.json(rows);
+    } catch (err) { handleDatabaseError(res, err); }
+});
 
 app.listen(PORT, () => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);

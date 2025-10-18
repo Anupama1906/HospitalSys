@@ -224,7 +224,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const renderAppointmentsTable = (data) => {
         const tableBody = document.getElementById("table-body");
         if (!data || data.length === 0) { tableBody.innerHTML = '<tr><td colspan="6" class="text-center p-4">No appointments found for this branch.</td></tr>'; return; }
-        const statusColors = { Scheduled: 'primary', Completed: 'success', Canceled: 'danger', Rescheduled: 'warning' };
+        const statusColors = { Scheduled: 'primary', Completed: 'success', Cancelled: 'danger', Rescheduled: 'warning' };
         tableBody.innerHTML = data.map(a => `<tr><td>${a.appointment_id}</td><td>${new Date(a.schedule_date).toLocaleString()}</td><td>${a.patient_name}</td><td>${a.doctor_name}</td><td><span class="badge bg-${statusColors[a.status] || 'secondary'}">${a.status}</span></td><td class="table-actions"><button class="btn btn-sm btn-outline-danger" data-action="delete" data-type="branch-appointment" data-id="${a.appointment_id}" title="Cancel Appointment"><i class="bi bi-trash-fill"></i></button></td></tr>`).join("");
     };
 
