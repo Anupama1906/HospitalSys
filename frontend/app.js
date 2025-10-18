@@ -390,12 +390,46 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div class="col-md-6 mb-3"><label class="form-label">Patient</label><select class="form-select" name="patient_id" required>${createOptions(patients,"patient_id","name",appointment.patient_id)}</select></div>
                 <div class="col-md-6 mb-3"><label class="form-label">Doctor</label><select class="form-select" name="doctor_id" required>${createOptions(doctors,"doctor_id","name",appointment.doctor_id)}</select></div>
                 <div class="col-md-6 mb-3"><label class="form-label">Branch</label><select class="form-select" name="branch_id" required>${createOptions(branches,"branch_id","name",appointment.branch_id)}</select></div>
-                <div class="col-md-6 mb-3"><label class="form-label">Date & Time</label><input type="datetime-local" class="form-control" name="schedule_date" value="${scheduleDate}" required></div>
+                <div class="col-md-6 mb-3"><label class="form-label">Date & Time</label><input type="datetime-local" class="form-control" name="schedule_date" value="${scheduleDate}" ${isEditing ? 'required' : ''}></div>
                 <div class="col-md-6 mb-3"><label class="form-label">Status</label><select class="form-select" name="status"><option ${appointment.status === "Scheduled" ? "selected" : ""}>Scheduled</option><option ${appointment.status === "Completed" ? "selected" : ""}>Completed</option><option ${appointment.status === "Cancelled" ? "selected" : ""}>Cancelled</option></select></div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Appointment Type</label>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="is_emergency" id="is_emergency" value="1" ${appointment.is_emergency ? "checked" : ""} ${isEditing ? 'disabled' : ''}>
+                        <label class="form-check-label" for="is_emergency">
+                            <i class="bi bi-exclamation-triangle-fill text-danger"></i> Emergency Walk-in
+                        </label>
+                    </div>
+                    <small class="text-muted">Emergency appointments are scheduled immediately</small>
+                </div>
             </div>
             <div class="modal-footer mt-4"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button><button type="submit" class="btn btn-primary">${isEditing ? "Save Changes" : "Create"}</button></div></form>`;
         formModal.show();
-        document.getElementById("modal-form").addEventListener("submit", (e) => { e.preventDefault(); const endpoint = isEditing ? `/api/appointments/${id}` : "/api/appointments"; submitForm(endpoint, isEditing ? "PUT" : "POST", Object.fromEntries(new FormData(e.target)), loadAppointmentsPage); });
+        
+        // Handle emergency checkbox to auto-set current time
+        if (!isEditing) {
+            const emergencyCheckbox = document.getElementById("is_emergency");
+            const dateTimeInput = document.querySelector('input[name="schedule_date"]');
+            emergencyCheckbox.addEventListener("change", (e) => {
+                if (e.target.checked) {
+                    const now = new Date();
+                    dateTimeInput.value = now.toISOString().slice(0, 16);
+                    dateTimeInput.readOnly = true;
+                } else {
+                    dateTimeInput.value = "";
+                    dateTimeInput.readOnly = false;
+                }
+            });
+        }
+        
+        document.getElementById("modal-form").addEventListener("submit", (e) => { 
+            e.preventDefault(); 
+            const formData = Object.fromEntries(new FormData(e.target));
+            // Convert checkbox to 0/1
+            formData.is_emergency = formData.is_emergency === "1" ? 1 : 0;
+            const endpoint = isEditing ? `/api/appointments/${id}` : "/api/appointments"; 
+            submitForm(endpoint, isEditing ? "PUT" : "POST", formData, loadAppointmentsPage); 
+        });
     };
 
     // app.js
@@ -637,8 +671,327 @@ const openStaffForm = async (id = null) => {
         });
     };
 
+    // --- INSURANCE CLAIMS PAGE ---
+    const loadInsuranceClaimsPage = async() => {
+        createPageTemplate({ title: "Insurance Claims", type: "claim", headers: ["Claim ID", "Patient", "Provider", "Amount", "Status", "Date"], showAddBtn: false });
+        renderSpinner("table-body");
+        currentViewData = await fetchData("/api/insurance-claims");
+        const tableBody = document.getElementById("table-body");
+        const renderClaims = (data) => {
+            if(data && data.length > 0) {
+                const statusColors = { Pending: 'warning', Approved: 'success', Rejected: 'danger', 'Under Review': 'info' };
+                tableBody.innerHTML = data.map(c => `<tr>
+                    <td>#${c.claim_id}</td>
+                    <td>${c.patient_name}</td>
+                    <td>${c.insurance_provider_name}</td>
+                    <td>$${parseFloat(c.claimed_amount).toFixed(2)}</td>
+                    <td><span class="badge bg-${statusColors[c.claim_status] || 'secondary'}">${c.claim_status}</span></td>
+                    <td>${new Date(c.claim_date).toLocaleDateString()}</td>
+                    <td class="table-actions">
+                        <button class="btn btn-sm btn-outline-primary" title="Update Status" data-action="update-claim" data-id="${c.claim_id}">
+                            <i class="bi bi-pencil-square"></i>
+                        </button>
+                    </td>
+                </tr>`).join("");
+            } else {
+                renderNoDataMessage("table-body");
+            }
+        };
+        renderClaims(currentViewData);
+        setupSearch(renderClaims, ['claim_id', 'patient_name', 'insurance_provider_name', 'claim_status']);
+    };
+
+    // --- REPORTS PAGE ---
+    const loadReportsPage = async() => {
+        mainContent.innerHTML = `
+            <div class="page-header">
+                <h1 class="h3">System Reports</h1>
+                <p class="text-muted">View comprehensive reports for clinic operations</p>
+            </div>
+            
+            <!-- Report Navigation -->
+            <div class="card mb-4">
+                <div class="card-body">
+                    <div class="btn-group" role="group">
+                        <input type="radio" class="btn-check" name="reportRadio" id="report1" autocomplete="off" checked>
+                        <label class="btn btn-outline-primary" for="report1">Branch Appointments</label>
+                        
+                        <input type="radio" class="btn-check" name="reportRadio" id="report2" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="report2">Doctor Revenue</label>
+                        
+                        <input type="radio" class="btn-check" name="reportRadio" id="report3" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="report3">Outstanding Balances</label>
+                        
+                        <input type="radio" class="btn-check" name="reportRadio" id="report4" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="report4">Treatment Categories</label>
+                        
+                        <input type="radio" class="btn-check" name="reportRadio" id="report5" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="report5">Insurance Coverage</label>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Report Content -->
+            <div class="card">
+                <div class="card-header" id="report-header">Branch-wise Appointment Summary</div>
+                <div class="card-body">
+                    <div id="report-content"></div>
+                </div>
+            </div>
+        `;
+
+        // Report loading functions
+        const loadReport1 = async () => {
+            document.getElementById('report-header').textContent = 'Report 1: Branch-wise Appointment Summary per Day';
+            const data = await fetchData('/api/reports/branch-appointments');
+            const content = document.getElementById('report-content');
+            if (data && data.length > 0) {
+                content.innerHTML = `
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Branch</th>
+                                    <th>Date</th>
+                                    <th>Total</th>
+                                    <th>Scheduled</th>
+                                    <th>Completed</th>
+                                    <th>Cancelled</th>
+                                    <th>Emergency</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.map(r => `<tr>
+                                    <td><strong>${r.branch_name}</strong></td>
+                                    <td>${new Date(r.appointment_date).toLocaleDateString()}</td>
+                                    <td><span class="badge bg-primary">${r.total_appointments}</span></td>
+                                    <td>${r.scheduled_count}</td>
+                                    <td>${r.completed_count}</td>
+                                    <td>${r.cancelled_count}</td>
+                                    <td>${r.emergency_count || 0}</td>
+                                </tr>`).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else {
+                content.innerHTML = '<p class="text-muted">No data available</p>';
+            }
+        };
+
+        const loadReport2 = async () => {
+            document.getElementById('report-header').textContent = 'Report 2: Doctor-wise Revenue Report';
+            const data = await fetchData('/api/reports/doctor-revenue');
+            const content = document.getElementById('report-content');
+            if (data && data.length > 0) {
+                content.innerHTML = `
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Doctor</th>
+                                    <th>Branch</th>
+                                    <th>Specialty</th>
+                                    <th>Total Appointments</th>
+                                    <th>Completed</th>
+                                    <th>Total Revenue</th>
+                                    <th>Avg Revenue</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.map(r => `<tr>
+                                    <td><strong>${r.doctor_name}</strong></td>
+                                    <td>${r.branch_name || 'N/A'}</td>
+                                    <td><span class="badge bg-info">${r.specialty_name || 'General'}</span></td>
+                                    <td>${r.total_appointments}</td>
+                                    <td>${r.completed_appointments}</td>
+                                    <td><strong>$${parseFloat(r.total_revenue).toFixed(2)}</strong></td>
+                                    <td>$${parseFloat(r.avg_revenue_per_appointment).toFixed(2)}</td>
+                                </tr>`).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else {
+                content.innerHTML = '<p class="text-muted">No data available</p>';
+            }
+        };
+
+        const loadReport3 = async () => {
+            document.getElementById('report-header').textContent = 'Report 3: Patients with Outstanding Balances';
+            const data = await fetchData('/api/reports/outstanding-patients');
+            const content = document.getElementById('report-content');
+            if (data && data.length > 0) {
+                content.innerHTML = `
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Patient</th>
+                                    <th>Contact</th>
+                                    <th>Unpaid Invoices</th>
+                                    <th>Total Outstanding</th>
+                                    <th>Earliest Due Date</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.map(r => `<tr>
+                                    <td><strong>${r.patient_name}</strong></td>
+                                    <td>${r.contact_info}</td>
+                                    <td>${r.unpaid_invoices}</td>
+                                    <td><strong class="text-danger">$${parseFloat(r.total_outstanding).toFixed(2)}</strong></td>
+                                    <td>${new Date(r.earliest_due_date).toLocaleDateString()}</td>
+                                    <td><span class="badge bg-${r.payment_status === 'Overdue' ? 'danger' : 'warning'}">${r.payment_status}</span></td>
+                                </tr>`).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else {
+                content.innerHTML = '<p class="text-muted text-center p-4">✅ No outstanding balances found!</p>';
+            }
+        };
+
+        const loadReport4 = async () => {
+            document.getElementById('report-header').textContent = 'Report 4: Number of Treatments per Category';
+            const data = await fetchData('/api/reports/treatment-categories');
+            const content = document.getElementById('report-content');
+            if (data && data.length > 0) {
+                content.innerHTML = `
+                    <div class="row">
+                        <div class="col-md-8">
+                            <div class="table-responsive">
+                                <table class="table table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>Category</th>
+                                            <th>Appointments</th>
+                                            <th>Total Treatments</th>
+                                            <th>Total Revenue</th>
+                                            <th>Avg Price</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${data.map(r => `<tr>
+                                            <td><strong>${r.category}</strong></td>
+                                            <td>${r.treatment_count || 0}</td>
+                                            <td>${r.total_treatments || 0}</td>
+                                            <td>$${parseFloat(r.total_revenue || 0).toFixed(2)}</td>
+                                            <td>$${parseFloat(r.avg_price || 0).toFixed(2)}</td>
+                                        </tr>`).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <canvas id="categoryChart" style="max-height: 300px;"></canvas>
+                        </div>
+                    </div>
+                `;
+                // Add chart
+                setTimeout(() => {
+                    const ctx = document.getElementById('categoryChart')?.getContext('2d');
+                    if (ctx) {
+                        new Chart(ctx, {
+                            type: 'pie',
+                            data: {
+                                labels: data.map(d => d.category),
+                                datasets: [{
+                                    data: data.map(d => d.treatment_count || 0),
+                                    backgroundColor: ['#6a5af9', '#36b9cc', '#1cc88a', '#f6c23e', '#e74a3b', '#858796', '#4e73df']
+                                }]
+                            },
+                            options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+                        });
+                    }
+                }, 100);
+            } else {
+                content.innerHTML = '<p class="text-muted">No data available</p>';
+            }
+        };
+
+        const loadReport5 = async () => {
+            document.getElementById('report-header').textContent = 'Report 5: Insurance Coverage vs Out-of-Pocket Payments';
+            const data = await fetchData('/api/reports/insurance-coverage');
+            const content = document.getElementById('report-content');
+            if (data && data.length > 0) {
+                const totalBilling = data.reduce((sum, r) => sum + parseFloat(r.total_billing || 0), 0);
+                const totalInsurance = data.reduce((sum, r) => sum + parseFloat(r.total_insurance_coverage || 0), 0);
+                const totalOutOfPocket = data.reduce((sum, r) => sum + parseFloat(r.total_out_of_pocket || 0), 0);
+                
+                content.innerHTML = `
+                    <div class="row mb-4">
+                        <div class="col-md-4">
+                            <div class="card bg-primary text-white">
+                                <div class="card-body text-center">
+                                    <h5>Total Billing</h5>
+                                    <h2>$${totalBilling.toFixed(2)}</h2>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card bg-success text-white">
+                                <div class="card-body text-center">
+                                    <h5>Insurance Coverage</h5>
+                                    <h2>$${totalInsurance.toFixed(2)}</h2>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card bg-warning text-white">
+                                <div class="card-body text-center">
+                                    <h5>Out-of-Pocket</h5>
+                                    <h2>$${totalOutOfPocket.toFixed(2)}</h2>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Insurance Provider</th>
+                                    <th>Coverage %</th>
+                                    <th>Patients</th>
+                                    <th>Invoices</th>
+                                    <th>Total Billing</th>
+                                    <th>Insurance Coverage</th>
+                                    <th>Out-of-Pocket</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.map(r => `<tr>
+                                    <td><strong>${r.insurance_provider}</strong></td>
+                                    <td><span class="badge bg-info">${parseFloat(r.coverage_percentage).toFixed(0)}%</span></td>
+                                    <td>${r.total_patients}</td>
+                                    <td>${r.total_invoices}</td>
+                                    <td>$${parseFloat(r.total_billing || 0).toFixed(2)}</td>
+                                    <td class="text-success">$${parseFloat(r.total_insurance_coverage || 0).toFixed(2)}</td>
+                                    <td class="text-warning">$${parseFloat(r.total_out_of_pocket || 0).toFixed(2)}</td>
+                                </tr>`).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else {
+                content.innerHTML = '<p class="text-muted">No data available</p>';
+            }
+        };
+
+        // Set up report navigation
+        document.getElementById('report1').addEventListener('change', loadReport1);
+        document.getElementById('report2').addEventListener('change', loadReport2);
+        document.getElementById('report3').addEventListener('change', loadReport3);
+        document.getElementById('report4').addEventListener('change', loadReport4);
+        document.getElementById('report5').addEventListener('change', loadReport5);
+
+        // Load first report
+        loadReport1();
+    };
+
     // --- ROUTING LOGIC & EVENT LISTENERS ---
-    const pageLoaders = { dashboard: loadDashboard, patients: loadPatientsPage, appointments: loadAppointmentsPage, doctors: loadDoctorsPage, staff: loadStaffPage, branches: loadBranchesPage, invoices: loadInvoicesPage, "insurance-providers": loadInsuranceProvidersPage, treatments: loadTreatmentsPage, specialties: loadSpecialtiesPage };
+    const pageLoaders = { dashboard: loadDashboard, patients: loadPatientsPage, appointments: loadAppointmentsPage, doctors: loadDoctorsPage, staff: loadStaffPage, branches: loadBranchesPage, invoices: loadInvoicesPage, "insurance-providers": loadInsuranceProvidersPage, treatments: loadTreatmentsPage, specialties: loadSpecialtiesPage, "insurance-claims": loadInsuranceClaimsPage, reports: loadReportsPage };
     const navigateTo = (page) => { navLinks.forEach((link) => link.classList.toggle("active", link.dataset.page === page)); (pageLoaders[page] || pageLoaders.dashboard)(); };
     document.querySelector(".sidebar").addEventListener("click", (e) => { const navLink = e.target.closest(".nav-link"); if (navLink) { e.preventDefault(); navigateTo(navLink.dataset.page); } });
     
